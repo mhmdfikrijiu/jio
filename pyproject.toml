@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jiofarm"
+version = "2.0.0"
+description = "Jio Google AI Pro Hunter — panen link redeem Gemini Pro"
+requires-python = ">=3.9"
+dependencies = [
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0",
+]
+
+[project.scripts]
+jiofarm = "jiofarm.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["."]

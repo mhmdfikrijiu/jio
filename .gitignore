@@ -1,0 +1,11 @@
+# SENSITIVE - jangan pernah di-push!
+.env
+results.db
+links.txt
+auto.log
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.zip
+jiofarm.egg-info/
