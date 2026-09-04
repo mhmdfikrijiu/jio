@@ -42,7 +42,7 @@ class SMSProvider(Protocol):
 def poll_otp(
     provider: SMSProvider,
     act_id: str,
-    timeout: int = 120,
+    timeout: int = 600,
     interval: int = 5,
     stop: threading.Event | None = None,
 ) -> str:
@@ -195,7 +195,7 @@ def hunt_once(
 
         # 5) poll OTP -------------------------------------------------------
         state.phase = Phase.WAITING_OTP
-        state.otp = poll_otp(provider, state.act_id, stop=stop)
+        state.otp = poll_otp(provider, state.act_id, timeout=cfg.otp_timeout, stop=stop)
 
         # 6) validate OTP ---------------------------------------------------
         state.phase = Phase.VALIDATING

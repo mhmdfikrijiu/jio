@@ -141,7 +141,7 @@ def phase_line(provider: str, ws) -> str:
         Phase.RENTING: f"📱 Menyewa nomor {provider}{err}",
         Phase.CHECKING: f"🔍 Cek subscriber Jio{phone}",
         Phase.SENDING_OTP: f"📤 Kirim OTP ke{phone}",
-        Phase.WAITING_OTP: f"⏳ Tunggu OTP masuk{phone} (maks 120 dtk)",
+        Phase.WAITING_OTP: f"⏳ Tunggu OTP masuk{phone} (maks 10 mnt)",
         Phase.VALIDATING: f"🔐 Validasi OTP{phone}",
         Phase.HUNTING: f"🎯 Buru link Google{phone}",
         Phase.DONE: f"✅ Selesai{phone}{err}",
@@ -159,7 +159,7 @@ def attempt_reason(ws) -> str:
     if "OTP gagal dikirim" in err:
         return f"{phone} → ❌ OTP Jio gagal dikirim"
     if "OTP timeout" in err:
-        return f"{phone} → ❌ OTP tidak masuk (120 dtk)"
+        return f"{phone} → ❌ OTP tidak masuk (10 mnt)"
     if "OTP invalid" in err:
         return f"{phone} → ❌ OTP salah"
     if "tidak ada promo" in err:
@@ -187,6 +187,11 @@ class HuntManager:
             return self.thread is not None and self.thread.is_alive()
 
     def start(self, cfg: Config, args: dict, notify) -> str:
+        if args["max_price"] is not None and args["max_price"] > cfg.price_cap:
+            return (
+                f"❌ --max-price ${args['max_price']} melebihi plafon ${cfg.price_cap}. "
+                f"Pakai maksimal ${cfg.price_cap}."
+            )
         with self._lock:
             if self.thread is not None and self.thread.is_alive():
                 return "⏳ Hunt sudah jalan. /status untuk pantau, /stop untuk hentikan."
@@ -201,7 +206,10 @@ class HuntManager:
             if args["target"]
             else (f"{args['count']} nomor" if args["count"] else "sampai dapat 1 link")
         )
-        mp = args["max_price"] if args["max_price"] is not None else cfg.effective_max_price
+        mp = min(
+            args["max_price"] if args["max_price"] is not None else cfg.effective_max_price,
+            cfg.price_cap,
+        )
         extra = ""
         if args["duration"]:
             extra = f", durasi {args['duration'] / 3600:.1f} jam"
@@ -345,16 +353,21 @@ def hunt_reply(cfg: Config, text: str, notify) -> str:
 def maxprice_reply(cfg: Config, text: str) -> str:
     parts = text.split()
     if len(parts) < 2:
-        return f"Max price saat ini: ${cfg.effective_max_price} — atur: /maxprice 0.5"
+        return (
+            f"Harga jalan: ${cfg.effective_max_price} "
+            f"(default ${cfg.max_price}, plafon ${cfg.price_cap}) — atur: /maxprice 0.47"
+        )
     try:
         v = float(parts[1])
     except ValueError:
         return f"Harga tidak valid: {parts[1]}"
     if v <= 0:
         return "Harga harus > 0."
+    if v > cfg.price_cap:
+        return f"❌ Melebihi plafon ${cfg.price_cap}. Maksimal yang boleh: ${cfg.price_cap}."
     cfg.max_price = v
     cfg.max_price_override = None
-    return f"✅ Max price diset ${v}."
+    return f"✅ Max price diset ${v} (plafon ${cfg.price_cap})."
 
 
 def handle_text(cfg: Config, text: str, notify=None) -> str | None:
@@ -391,22 +404,36 @@ def run_bot(cfg: Config) -> None:
     if not cfg.tg_bot_token:
         raise SystemExit("TG_BOT_TOKEN belum diset di .env")
     token = cfg.tg_bot_token
+    try:
+        me = _call(token, "getMe", timeout=15).get("result", {})
+        print(f"[bot] login @{me.get('username')} (id={me.get('id')})", flush=True)
+    except Exception as e:
+        print(f"[bot] getMe gagal: {e}", flush=True)
     allowed = str(cfg.tg_chat_id or "")
+    print(f"[bot] chat filter: {allowed or '(semua)'}", flush=True)
     offset = 0
+    idle_log = time.time()
     while True:
         try:
             data = _call(token, "getUpdates", {"offset": offset, "timeout": 30}, timeout=40)
-        except Exception:
+        except Exception as e:
+            print(f"[bot] poll error: {e}", flush=True)
             time.sleep(5)
             continue
-        for upd in data.get("result", []):
+        results = data.get("result", [])
+        if not results and time.time() - idle_log >= 300:
+            idle_log = time.time()
+            print("[bot] polling... (belum ada pesan)", flush=True)
+        for upd in results:
             offset = upd.get("update_id", offset) + 1
             msg = upd.get("message") or {}
             chat_id = (msg.get("chat") or {}).get("id")
             text = (msg.get("text") or "").strip()
             if not chat_id or not text:
                 continue
+            print(f"[bot] pesan dari {chat_id}: {text[:60]}", flush=True)
             if allowed and str(chat_id) != allowed:
+                print(f"[bot] chat {chat_id} diabaikan (filter {allowed})", flush=True)
                 continue
             notify = lambda msg, _c=chat_id: _send(token, _c, msg)
             try:

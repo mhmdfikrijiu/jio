@@ -54,13 +54,15 @@ def load_config() -> "Config":
         provider=provider,
         api_key=api_key,
         product=product,
-        max_price=float(os.getenv("MAX_PRICE", "1.0")),
+        max_price=float(os.getenv("MAX_PRICE", "0.47")),
+        price_cap=float(os.getenv("PRICE_CAP", "0.5")),
         cancel_delay=float(os.getenv("CANCEL_DELAY_SECONDS", "150")),
         otp_fail_delay=float(os.getenv("OTP_FAIL_DELAY_SECONDS", "420")),
         concurrency=int(os.getenv("CONCURRENCY", "2")),
         db_path=os.getenv("DB_PATH", "results.db"),
         rent_retries=int(os.getenv("RENT_RETRIES", "600")),
         rent_retry_delay=float(os.getenv("RENT_RETRY_DELAY_SECONDS", "5")),
+        otp_timeout=int(os.getenv("OTP_TIMEOUT_SECONDS", "600")),
         tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
         tg_chat_id=os.getenv("TG_CHAT_ID", "").strip(),
     )
@@ -73,13 +75,15 @@ class Config:
     provider: str = "grizzlysms"
     api_key: str = ""
     product: str = "jio"  # GrizzlySMS: "jio", 5SIM: "jiomart"
-    max_price: float = 1.0
+    max_price: float = 0.47
+    price_cap: float = 0.5
     cancel_delay: float = 150.0
     otp_fail_delay: float = 420.0
     concurrency: int = 2
     db_path: str = "results.db"
     rent_retries: int = 600
     rent_retry_delay: float = 5.0
+    otp_timeout: int = 600
 
     # telegram (optional)
     tg_bot_token: str = ""
@@ -94,9 +98,10 @@ class Config:
 
     @property
     def effective_max_price(self) -> float | None:
-        if self.max_price_override is not None:
-            return self.max_price_override
-        return self.max_price
+        raw = self.max_price_override if self.max_price_override is not None else self.max_price
+        if raw is None:
+            return None
+        return min(raw, self.price_cap)
 
     @property
     def effective_concurrency(self) -> int:
