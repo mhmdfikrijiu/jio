@@ -67,8 +67,13 @@ def prefilter_once(
     phone = normalize_phone(raw)
     ok, detail = jio_check_detail(phone)
     if not ok:
-        refunds.schedule(act_id, 120, aggressive=True)
-        _report("fail", phone, detail)
+        # Langsung cancel via API Grizzly — dana balik dalam menit
+        try:
+            provider.cancel(act_id)
+            _report("fail", phone, f"TUNAI CANCEL ({detail})")
+        except Exception as e:
+            refunds.schedule(act_id, 120, aggressive=True)
+            _report("fail", phone, f"API GAGAL {e}")
         return None
     return act_id, phone
 
@@ -181,7 +186,11 @@ class Pipeline:
             with self.lock:
                 if ev == "fail":
                     self.failed += 1
-                    msg = f"❌ +91{phone} bukan subscriber ({detail}) — gagal #{self.failed}"
+                    fails = self.failed
+                    if "TUNAI" in detail:
+                        msg = f"♻️ +91{phone} bukan subscriber ({detail[:30]}) — refund tunai!"
+                    else:
+                        msg = f"❌ +91{phone} bukan subscriber ({detail}) — gagal #{fails}"
                 elif ev == "wait":
                     if not self.waiting_stock:
                         self.waiting_stock = True
