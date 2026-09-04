@@ -9,3 +9,5 @@ __pycache__/
 venv/
 *.zip
 jiofarm.egg-info/
+bot-local*.log
+progress-out.txt

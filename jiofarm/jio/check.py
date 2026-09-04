@@ -11,6 +11,16 @@ JIO_CHECK = "https://www.jio.com/api/jio-recharge-service/recharge/mobility/numb
 
 def jio_check_subscriber(phone: str) -> bool:
     """Return True if *phone* is a valid Jio subscriber."""
+    ok, _ = jio_check_detail(phone)
+    return ok
+
+
+def jio_check_detail(phone: str) -> tuple[bool, str]:
+    """Check subscriber status, returning (is_subscribed, detail).
+
+    *detail* is "OK" on success, otherwise Jio's errorMessage
+    (e.g. "NOT_SUBSCRIBED_USER") or the transport error.
+    """
     try:
         res = requests.get(
             JIO_CHECK.format(phone=phone),
@@ -21,9 +31,15 @@ def jio_check_subscriber(phone: str) -> bool:
             },
             timeout=10,
         )
-        return res.status_code == 200
-    except Exception:
-        return False
+        if res.status_code == 200:
+            return True, "OK"
+        try:
+            detail = res.json().get("errorMessage", res.text[:120])
+        except Exception:
+            detail = res.text[:120] or f"HTTP {res.status_code}"
+        return False, str(detail)
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
 
 
 def normalize_phone(raw: str) -> str:

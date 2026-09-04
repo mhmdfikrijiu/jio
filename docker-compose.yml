@@ -1,0 +1,28 @@
+services:
+  hunter:
+    build: .
+    container_name: jiofarm-hunter
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/results.db
+    volumes:
+      - jiofarm-data:/data
+    restart: unless-stopped
+    command: ["python", "-m", "jiofarm", "run", "--db", "/data/results.db"]
+
+  bot:
+    build: .
+    container_name: jiofarm-bot
+    env_file:
+      - .env
+    environment:
+      DB_PATH: /data/results.db
+    volumes:
+      - jiofarm-data:/data
+    restart: unless-stopped
+    command: ["python", "-m", "jiofarm", "bot"]
+    profiles: ["bot"]
+
+volumes:
+  jiofarm-data:

@@ -234,6 +234,7 @@ def run(
     slots = threading.Semaphore(workers_count)
     found: list[str] = []
     done_count = [0]
+    started_count = [0]
     stop = threading.Event()
     start = time.time()
     lock = threading.Lock()
@@ -253,15 +254,17 @@ def run(
     def job(ws: WorkerState, mode_count: bool) -> None:
         while not hit_stop():
             with lock:
-                if mode_count and done_count[0] >= (count or 1):
+                if mode_count and started_count[0] >= (count or 1):
                     return
-                done_count[0] += 1
+                started_count[0] += 1
             try:
                 link = hunt_once(provider, store, refunds, slots, cfg, ws)
             except Exception as e:
                 ws.phase = Phase.ERROR
                 ws.error = str(e)
                 link = None
+            with lock:
+                done_count[0] += 1
             if link:
                 with lock:
                     found.append(link)
@@ -304,9 +307,9 @@ def run(
         console.print("\n[warning]Dihentikan oleh user.[/]")
         stop.set()
 
-    # wait for threads
+    # wait for threads (count mode: tanpa timeout, hunt bisa lama karena retry sewa)
     for t in threads:
-        t.join(timeout=30)
+        t.join(timeout=None if is_count_mode else 30)
 
     elapsed = time.time() - start
     refunds.wait_all()
@@ -360,6 +363,23 @@ def stats(
     table.add_row("Login sukses", str(st["logins"]))
     table.add_row("Link ditemukan", f"[success]{st['links']}[/]")
     console.print(table)
+
+
+@app.command()
+def bot() -> None:
+    """Jalankan bot Telegram (cek subscribe, saldo, stats)."""
+    from jiofarm.tgbot import run_bot
+
+    cfg = load_config()
+    if not cfg.tg_bot_token:
+        console.print(
+            "[error]TG_BOT_TOKEN belum diset. Isi di .env:[/]\n"
+            "  TG_BOT_TOKEN=123456:ABCdef...\n"
+            "  TG_CHAT_ID=987654321  (opsional, kunci ke chat sendiri)"
+        )
+        raise typer.Exit(1)
+    console.print("[success]Bot jalan. Kirim /start di Telegram. Ctrl+C untuk stop.[/]")
+    run_bot(cfg)
 
 
 # ------------------------------------------------------------------- interactive menu (no args)

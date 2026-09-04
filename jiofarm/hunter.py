@@ -39,13 +39,22 @@ class SMSProvider(Protocol):
     def cancel(self, act_id: str) -> None: ...
 
 
-def poll_otp(provider: SMSProvider, act_id: str, timeout: int = 120, interval: int = 5) -> str:
+def poll_otp(
+    provider: SMSProvider,
+    act_id: str,
+    timeout: int = 120,
+    interval: int = 5,
+    stop: threading.Event | None = None,
+) -> str:
     """Poll the provider until the OTP arrives or the deadline expires.
 
     Uses duck-typing: tries ``status()`` first (GrizzlySMS), then ``check()`` (5SIM).
+    If *stop* is set, aborts early with an Exception.
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if stop is not None and stop.is_set():
+            raise Exception("dihentikan")
         # GrizzlySMS-style: .status() returns ("WAIT"/"OK"/"CANCEL", code)
         if hasattr(provider, "status"):
             state, code = provider.status(act_id)  # type: ignore[attr-defined]
@@ -62,7 +71,11 @@ def poll_otp(provider: SMSProvider, act_id: str, timeout: int = 120, interval: i
                 raise Exception(f"activation {status}")
         else:
             raise Exception("provider tidak mendukung polling OTP")
-        time.sleep(interval)
+        if stop is not None:
+            if stop.wait(interval):
+                raise Exception("dihentikan")
+        else:
+            time.sleep(interval)
     raise Exception(f"OTP timeout setelah {timeout}s")
 
 
@@ -104,6 +117,7 @@ def hunt_once(
     slots: threading.Semaphore,
     cfg: Config,
     state: WorkerState,
+    stop: threading.Event | None = None,
 ) -> str | None:
     """Run one complete hunt attempt, updating *state* for live display.
 
@@ -119,8 +133,34 @@ def hunt_once(
     state.error = ""
 
     try:
-        # 1) rent a number --------------------------------------------------
-        state.act_id, raw = provider.rent(cfg.effective_max_price)
+        # 1) rent a number (retry on NO_NUMBERS, seperti website) -----------
+        last_err: Exception | None = None
+        for attempt in range(1, cfg.rent_retries + 1):
+            if stop is not None and stop.is_set():
+                state.phase = Phase.ERROR
+                state.error = "dihentikan"
+                return None
+            try:
+                state.act_id, raw = provider.rent(cfg.effective_max_price)
+                last_err = None
+                break
+            except Exception as e:
+                # hanya retry kalau stok kosong; error lain (BAD_KEY, dsb) langsung gagal
+                if "NO_NUMBERS" not in str(e).upper().replace(" ", "_"):
+                    raise
+                last_err = e
+                state.error = f"menunggu stok... (attempt {attempt}/{cfg.rent_retries})"
+                if stop is not None:
+                    if stop.wait(cfg.rent_retry_delay):
+                        state.phase = Phase.ERROR
+                        state.error = "dihentikan"
+                        return None
+                else:
+                    time.sleep(cfg.rent_retry_delay)
+        if last_err is not None:
+            state.phase = Phase.ERROR
+            state.error = f"stok kosong setelah {cfg.rent_retries}x coba: {last_err}"
+            return None
         state.phone = normalize_phone(raw)
 
         # 2) check subscriber -----------------------------------------------
@@ -155,7 +195,7 @@ def hunt_once(
 
         # 5) poll OTP -------------------------------------------------------
         state.phase = Phase.WAITING_OTP
-        state.otp = poll_otp(provider, state.act_id)
+        state.otp = poll_otp(provider, state.act_id, stop=stop)
 
         # 6) validate OTP ---------------------------------------------------
         state.phase = Phase.VALIDATING

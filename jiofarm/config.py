@@ -59,6 +59,8 @@ def load_config() -> "Config":
         otp_fail_delay=float(os.getenv("OTP_FAIL_DELAY_SECONDS", "420")),
         concurrency=int(os.getenv("CONCURRENCY", "2")),
         db_path=os.getenv("DB_PATH", "results.db"),
+        rent_retries=int(os.getenv("RENT_RETRIES", "600")),
+        rent_retry_delay=float(os.getenv("RENT_RETRY_DELAY_SECONDS", "5")),
         tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
         tg_chat_id=os.getenv("TG_CHAT_ID", "").strip(),
     )
@@ -76,6 +78,8 @@ class Config:
     otp_fail_delay: float = 420.0
     concurrency: int = 2
     db_path: str = "results.db"
+    rent_retries: int = 600
+    rent_retry_delay: float = 5.0
 
     # telegram (optional)
     tg_bot_token: str = ""
