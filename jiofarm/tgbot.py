@@ -36,6 +36,8 @@ HELP = (
     "/maxprice X — atur max harga (cth: /maxprice 0.5)\n"
     "/status — status hunt yang jalan\n"
     "/stop — hentikan hunt\n\n"
+    "/refunds — cek aktivasi aktif\n"
+    "/cancel <act_id> — cancel manual (kembalikan dana)\n\n"
     "/balance — saldo provider\n"
     "/stats — statistik hunt"
 )
@@ -388,6 +390,26 @@ def handle_text(cfg: Config, text: str, notify=None) -> str | None:
         return _HUNT.stop_hunt()
     if low.startswith("/maxprice"):
         return maxprice_reply(cfg, text)
+    if low.startswith("/cancel"):
+        parts = text.split()
+        if len(parts) < 2:
+            return "Kirim: /cancel 593304018"
+        act_id = parts[1]
+        try:
+            from jiofarm.hunter import create_provider
+            p = create_provider(cfg)
+            p.cancel(act_id)
+            return f"✅ Act {act_id} di-cancel — refund diproses Grizzly (bisa beberapa jam)"
+        except Exception as e:
+            return f"Gagal cancel: {e}"
+    if low.startswith("/refunds"):
+        from jiofarm.hunter import create_provider
+        p = create_provider(cfg)
+        try:
+            active = p._get({"action": "getActiveActivations"})
+            return f"📋 Aktif ({active.count('activationId')} item):\n{active[:500]}..."
+        except Exception as e:
+            return f"Gagal cek: {e}"
     if low.startswith("/hunt"):
         if notify is None:
             return "Hunt via bot butuh sesi bot aktif."

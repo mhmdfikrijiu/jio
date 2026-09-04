@@ -22,7 +22,7 @@ class Cancellable(Protocol):
 
 
 # How often to retry in aggressive mode (seconds)
-AGGRESSIVE_INTERVAL = 30
+AGGRESSIVE_INTERVAL = 5
 
 
 class RefundWorker:
