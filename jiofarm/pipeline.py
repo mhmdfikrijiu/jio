@@ -67,10 +67,37 @@ def prefilter_once(
     phone = normalize_phone(raw)
     ok, detail = jio_check_detail(phone)
     if not ok:
-        # Grizzly butuh >2 menit dari activation time sebelum bisa cancel
-        # langsung vs schedule refund agresif
-        refunds.schedule(act_id, 120, aggressive=True)
-        _report("fail", phone, f"TIDAK SUBSCRIBED ({detail[:30]})")
+        # Grizzly hanya bisa cancel jika aktivasi >2 menit dari creation time
+        # Kita coba langsung + retry 3x dengan delay 60s antar percobaan
+        
+        for attempt in range(3):
+            try:
+                result = provider.cancel(act_id)
+                
+                # Verifikasi status setelah cancel
+                if result is not None and 'CANCEL' in str(result).upper():
+                    _report("fail", phone, f"CANCEL BERHASIL! ({detail[:30]})")
+                    break
+                
+                print(f"[DEBUG] Cancel attempt {attempt+1}: status={result}", flush=True)
+                
+            except Exception as e:
+                error_msg = str(e).upper()
+                if 'CANCEL' in error_msg or 'ERROR' not in error_msg:
+                    _report("fail", phone, f"CANCEL OK ({error_msg[:30]})")
+                    break
+                
+                print(f"[DEBUG] Cancel failed: {e}", flush=True)
+                
+                if attempt < 2:
+                    import time
+                    print(f"[DEBUG] Retry after 60s...", flush=True)
+                    time.sleep(60)
+        else:
+            # Semua percobaan gagal -> gunakan refund queue
+            refunds.schedule(act_id, 120, aggressive=True)
+            _report("fail", phone, f"REFUND QUEUE ({detail[:30]}) — dana balik ~5 menit")
+        
         return None
     return act_id, phone
 
