@@ -399,7 +399,7 @@ def handle_text(cfg: Config, text: str, notify=None) -> str | None:
             from jiofarm.hunter import create_provider
             p = create_provider(cfg)
             p.cancel(act_id)
-            return f"✅ Act {act_id} di-cancel — refund diproses Grizzly (bisa beberapa jam)"
+            return f"✅ Act {act_id} di-cancel — refund diproses Grizzly (bisa beberapa menit)"
         except Exception as e:
             return f"Gagal cancel: {e}"
     if low.startswith("/refunds"):
