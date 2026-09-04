@@ -293,11 +293,17 @@ class HuntManager:
 
         stopped = False
         last_beat = 0.0
+        last_phases: dict = {}
         while not hit_stop():
             if stop.wait(10):
                 stopped = True
                 break
-            if time.time() - last_beat >= 120:
+            for ws in states:
+                key = (ws.wid, ws.phase, ws.phone)
+                if key != last_phases.get(ws.wid) and ws.phase.name != "IDLE":
+                    last_phases[ws.wid] = key
+                    notify(f"👷 H{ws.wid}: {phase_line(cfg.provider.upper(), ws)}")
+            if time.time() - last_beat >= 60:
                 last_beat = time.time()
                 notify(f"📡 {pipe.stats_line()}")
 
@@ -317,7 +323,7 @@ class HuntManager:
         with pipe.lock:
             summary = (
                 f"🦁 Hunt {why} ({el}s)\n"
-                f"🔍 Dicek: {pipe.checked} | lolos: {pipe.passed} | "
+                f"🔍 Dicek: {pipe.checked} (gagal {pipe.failed}) | lolos: {pipe.passed} | "
                 f"hunt: {pipe.done} | 🎯 Link: {len(pipe.found)}{bal_line}"
             )
             found = list(pipe.found)

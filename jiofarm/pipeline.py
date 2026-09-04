@@ -30,9 +30,22 @@ def prefilter_once(
     refunds: RefundWorker,
     cfg: Config,
     stop: threading.Event | None = None,
+    report=None,
 ) -> tuple[str, str] | None:
-    """Sewa 1 nomor + cek subscriber. Kembalikan (act_id, phone) jika lolos."""
-    for _ in range(cfg.rent_retries):
+    """Sewa 1 nomor + cek subscriber. Kembalikan (act_id, phone) jika lolos.
+
+    *report*, kalau diisi, dipanggil sebagai report(event, phone, detail)
+    dengan event: "wait" (stok kosong, throttling urusan pemanggil),
+    "empty" (menyerah setelah rent_retries), "fail" (cek subscriber gagal).
+    """
+    def _report(ev: str, phone: str = "", detail: str = "") -> None:
+        if report is not None:
+            try:
+                report(ev, phone, detail)
+            except Exception:
+                pass
+
+    for attempt in range(1, cfg.rent_retries + 1):
         if stop is not None and stop.is_set():
             return None
         try:
@@ -41,18 +54,21 @@ def prefilter_once(
         except Exception as e:
             if "NO_NUMBERS" not in str(e).upper().replace(" ", "_"):
                 raise
+            _report("wait", "", f"attempt {attempt}/{cfg.rent_retries}")
             if stop is not None:
                 if stop.wait(cfg.rent_retry_delay):
                     return None
             else:
                 time.sleep(cfg.rent_retry_delay)
     else:
+        _report("empty")
         return None
 
     phone = normalize_phone(raw)
-    ok, _ = jio_check_detail(phone)
+    ok, detail = jio_check_detail(phone)
     if not ok:
         refunds.schedule(act_id, 120, aggressive=True)
+        _report("fail", phone, detail)
         return None
     return act_id, phone
 
@@ -152,19 +168,38 @@ class Pipeline:
         self.ready: queue.Queue = queue.Queue()
         self.lock = threading.Lock()
         self.checked = 0
+        self.failed = 0
         self.passed = 0
         self.done = 0
         self.found: list[str] = []
+        self.waiting_stock = False
         self.start = time.time()
 
     def prefilter_loop(self, target_checks: int | None) -> None:
+        def report(ev: str, phone: str = "", detail: str = "") -> None:
+            msg = None
+            with self.lock:
+                if ev == "fail":
+                    self.failed += 1
+                    msg = f"❌ +91{phone} bukan subscriber ({detail}) — gagal #{self.failed}"
+                elif ev == "wait":
+                    if not self.waiting_stock:
+                        self.waiting_stock = True
+                        msg = f"⏳ Stok kosong, menunggu... ({detail})"
+                elif ev == "empty":
+                    msg = "❌ Stok kosong — menyerah, coba lagi nanti"
+            if msg:
+                self.notify(msg)
+
         while not self.stop.is_set():
             if target_checks is not None:
                 with self.lock:
                     if self.checked >= target_checks:
                         return
             try:
-                got = prefilter_once(self.provider, self.refunds, self.cfg, self.stop)
+                got = prefilter_once(
+                    self.provider, self.refunds, self.cfg, self.stop, report=report
+                )
             except Exception as e:
                 if "NO_NUMBERS" not in str(e).upper().replace(" ", "_"):
                     self.notify(f"⚠️ Prefilter error: {e}")
@@ -180,6 +215,10 @@ class Pipeline:
             act_id, phone = got
             with self.lock:
                 self.passed += 1
+                was_waiting = self.waiting_stock
+                self.waiting_stock = False
+            if was_waiting:
+                self.notify("📦 Stok ada lagi — lanjut sewa")
             self.notify(f"✅ +91{phone} subscribed — masuk antrean OTP")
             self.ready.put((act_id, phone))
 
@@ -215,8 +254,9 @@ class Pipeline:
         el = int(time.time() - self.start)
         with self.lock:
             return (
-                f"⏱ {el}s | dicek {self.checked} | lolos {self.passed} | "
-                f"hunt {self.done} | 🎯 {len(self.found)} link | antre {self.ready.qsize()}"
+                f"⏱ {el}s | dicek {self.checked} (gagal {self.failed}) | "
+                f"lolos {self.passed} | hunt {self.done} | "
+                f"🎯 {len(self.found)} link | antre {self.ready.qsize()}"
             )
 
     def drain(self) -> int:
