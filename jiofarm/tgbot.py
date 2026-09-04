@@ -31,8 +31,8 @@ HELP = (
     "🦁 JioFarm Bot\n\n"
     "/check <nomor> — cek subscribe Jio (cth: /check 7995112495)\n"
     "atau kirim nomornya langsung.\n\n"
-    "/hunt [n] [--max-price X] [--target N] [--duration 2h]\n"
-    "  cari nomor sampai dapat link (cth: /hunt 5 --max-price 0.5)\n"
+    "/hunt [n] [--max-price X] [--target N] [--duration 2h] [--workers K]\n"
+    "  cari nomor sampai dapat link (cth: /hunt 5 --max-price 0.47 --workers 4)\n"
     "/maxprice X — atur max harga (cth: /maxprice 0.5)\n"
     "/status — status hunt yang jalan\n"
     "/stop — hentikan hunt\n\n"
@@ -103,9 +103,9 @@ def _parse_duration(s: str) -> float:
 
 
 def parse_hunt_args(text: str) -> dict:
-    """Parse '/hunt [n] [--max-price X] [--target N] [--duration 2h]'."""
+    """Parse '/hunt [n] [--max-price X] [--target N] [--duration 2h] [--workers K]'."""
     parts = text.split()[1:]
-    out: dict = {"count": None, "max_price": None, "target": None, "duration": None}
+    out: dict = {"count": None, "max_price": None, "target": None, "duration": None, "workers": None}
     rest: list[str] = []
     i = 0
     while i < len(parts):
@@ -118,6 +118,9 @@ def parse_hunt_args(text: str) -> dict:
             i += 2
         elif p == "--duration" and i + 1 < len(parts):
             out["duration"] = _parse_duration(parts[i + 1])
+            i += 2
+        elif p == "--workers" and i + 1 < len(parts):
+            out["workers"] = int(parts[i + 1])
             i += 2
         else:
             rest.append(p)
@@ -229,107 +232,97 @@ class HuntManager:
             alive = self.thread is not None and self.thread.is_alive()
         if not alive:
             return "Tidak ada hunt yang jalan."
-        if not info:
+        pipe = info.get("pipe")
+        if pipe is None:
             return "🦁 Hunt baru mulai..."
-        el = int(time.time() - info.get("start", time.time()))
-        st = info.get("state")
-        phase = st.phase.name if st else "-"
-        phone = (st.phone or "-") if st else "-"
-        err = (st.error or "") if st else ""
-        return (
-            "🦁 Hunt jalan\n"
-            f"⏱ {el}s | attempt {info.get('done', 0)} | 🎯 {info.get('found', 0)} link\n"
-            f"Fase: {phase} | {phone} {err}"
-        )
+        return "🦁 Hunt jalan\n" + pipe.stats_line()
 
     def _run(self, cfg: Config, args: dict, notify) -> None:
-        from jiofarm.console import tg_send  # noqa: F401 (keep import local, avoid cycle)
-        from jiofarm.grizzly.refund import RefundWorker
-        from jiofarm.hunter import WorkerState, create_provider, hunt_once
-        from jiofarm.storage.store import Store
+        from jiofarm.hunter import WorkerState
+        from jiofarm.pipeline import Pipeline
 
         if args["max_price"] is not None:
             cfg.max_price_override = args["max_price"]
-        provider = create_provider(cfg)
-        store = Store(cfg.db_path)
-        refunds = RefundWorker(provider, log=lambda _: None)
-        slots = threading.Semaphore(cfg.effective_concurrency)
-        ws = WorkerState(wid=1)
-        found: list[str] = []
-        done = 0
-        start = time.time()
+        if args["workers"]:
+            cfg.prefilter_workers = max(1, min(args["workers"], 8))
+
+        pipe = Pipeline(cfg, notify)
         stop = self.stop
+        with self._lock:
+            self.info = {"pipe": pipe, "start": pipe.start}
+
+        try:
+            bal0 = pipe.provider.balance()
+            notify(f"💰 Saldo awal: ${bal0:,.2f}")
+        except Exception:
+            bal0 = None
+        notify(
+            f"🔍 Prefilter {cfg.prefilter_workers} worker + "
+            f"hunt {cfg.hunt_slots} slot, max ${cfg.effective_max_price}"
+        )
+
+        threads: list[threading.Thread] = []
         is_count = not (args["target"] or args["duration"])
-        total = args["count"] or (1 if is_count and not args["target"] else 0)
+        total = args["count"] or (1 if is_count else 0)
+        target_checks = total if is_count else None
+
+        for _ in range(cfg.prefilter_workers):
+            t = threading.Thread(
+                target=pipe.prefilter_loop, args=(target_checks,), daemon=True
+            )
+            t.start()
+            threads.append(t)
+
+        states = [WorkerState(wid=i + 1) for i in range(cfg.hunt_slots)]
+        for ws in states:
+            t = threading.Thread(target=pipe.hunt_loop, args=(ws,), daemon=True)
+            t.start()
+            threads.append(t)
 
         def hit_stop() -> bool:
             if stop.is_set():
                 return True
-            if args["duration"] and time.time() - start >= args["duration"]:
+            if args["duration"] and time.time() - pipe.start >= args["duration"]:
                 return True
-            if args["target"] and len(found) >= args["target"]:
-                return True
-            if is_count and done >= (total or 1):
-                return True
+            with pipe.lock:
+                if args["target"] and len(pipe.found) >= args["target"]:
+                    return True
+                if is_count and (pipe.done >= total or pipe.checked >= total):
+                    return True
             return False
 
-        with self._lock:
-            self.info = {"start": start, "done": 0, "found": 0, "state": ws}
-        try:
-            bal0 = provider.balance()
-            notify(f"💰 Saldo awal: ${bal0:,.2f}")
-        except Exception:
-            bal0 = None
         stopped = False
-
-        def watcher() -> None:
-            last_key = None
-            last_sent = 0.0
-            while not stop.is_set() and self.running():
-                key = (ws.phase, ws.phone)
-                now = time.time()
-                if key != last_key or now - last_sent >= self.PROGRESS_INTERVAL:
-                    last_key = key
-                    last_sent = now
-                    line = phase_line(provider=cfg.provider.upper(), ws=ws)
-                    notify(f"📡 Attempt {done + 1}\n{line}")
-                stop.wait(5)
-
-        threading.Thread(target=watcher, daemon=True).start()
+        last_beat = 0.0
         while not hit_stop():
-            try:
-                link = hunt_once(provider, store, refunds, slots, cfg, ws, stop=stop)
-            except Exception as e:
-                ws.error = str(e)
-                link = None
-            done += 1
-            with self._lock:
-                self.info.update({"done": done, "found": len(found)})
-            notify(f"📋 Attempt {done}: {attempt_reason(ws)}")
-            if link:
-                found.append(link)
-                with self._lock:
-                    self.info["found"] = len(found)
-                notify(f"🎯 Link ketemu!\n\nNomor: {ws.phone}\n{link}")
-            if stop.is_set():
+            if stop.wait(10):
                 stopped = True
                 break
-            if not hit_stop():
-                if stop.wait(3):
-                    stopped = True
-                    break
-        refunds.wait_all()
-        el = int(time.time() - start)
+            if time.time() - last_beat >= 120:
+                last_beat = time.time()
+                notify(f"📡 {pipe.stats_line()}")
+
+        stop.set()
+        drained = pipe.drain()
+        for t in threads:
+            t.join(timeout=30)
+        pipe.refunds.wait_all()
+
+        el = int(time.time() - pipe.start)
         why = "dihentikan 🛑" if stopped else "selesai ✅"
         try:
-            bal1 = provider.balance()
+            bal1 = pipe.provider.balance()
             bal_line = f"\n💰 Saldo: ${bal0:,.2f} → ${bal1:,.2f}" if bal0 is not None else ""
         except Exception:
             bal_line = ""
-        summary = (
-            f"🦁 Hunt {why} ({el}s)\n"
-            f"📱 Diproses: {done} | 🎯 Link: {len(found)}{bal_line}"
-        )
+        with pipe.lock:
+            summary = (
+                f"🦁 Hunt {why} ({el}s)\n"
+                f"🔍 Dicek: {pipe.checked} | lolos: {pipe.passed} | "
+                f"hunt: {pipe.done} | 🎯 Link: {len(pipe.found)}{bal_line}"
+            )
+            found = list(pipe.found)
+        if drained:
+            summary += f"\n♻ {drained} nomor antre di-refund"
         if found:
             summary += "\n\n" + "\n".join(found)
         notify(summary)

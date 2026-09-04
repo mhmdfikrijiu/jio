@@ -22,11 +22,15 @@ Isi minimal `.env`:
 ```env
 PROVIDER=grizzlysms
 GRIZZLY_API_KEY=xxxx
-MAX_PRICE=0.5
+MAX_PRICE=0.47
+PRICE_CAP=0.5
 CONCURRENCY=2
 DB_PATH=/data/results.db
 RENT_RETRIES=600
 RENT_RETRY_DELAY_SECONDS=5
+OTP_TIMEOUT_SECONDS=600
+PREFILTER_WORKERS=4
+HUNT_SLOTS=2
 TG_BOT_TOKEN=123456:ABCdef...
 TG_CHAT_ID=987654321
 ```
@@ -57,7 +61,9 @@ Backup: `docker run --rm -v jiofarm-data:/data -v $PWD:/b ubuntu cp /data/result
 ## Bot Telegram
 
 Kirim ke bot: `/start`, `/check 7995112495`, nomor langsung, `/balance`, `/stats`.
-Kontrol hunt: `/hunt 5 --max-price 0.5`, `/hunt --target 3`, `/hunt --duration 2h`,
-`/status`, `/stop`, `/maxprice 0.5`.
-Bot kirim update tiap tahap (sewa → cek → OTP → buru) + ringkasan + saldo awal/akhir.
+Kontrol hunt: `/hunt 5 --max-price 0.47 --workers 4`, `/hunt --target 3`, `/hunt --duration 2h`,
+`/status`, `/stop`, `/maxprice 0.47`.
+Pipeline: prefilter cepat (sewa+cek, default 4 worker) + hunt lambat OTP
+(default 2 slot). Nomor lolos langsung dikirim ke chat, nomor busuk
+di-refund otomatis. Bot kirim update tiap tahap + ringkasan + saldo awal/akhir.
 Kalau `TG_CHAT_ID` diset, bot hanya merespons chat itu.

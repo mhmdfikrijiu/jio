@@ -63,6 +63,8 @@ def load_config() -> "Config":
         rent_retries=int(os.getenv("RENT_RETRIES", "600")),
         rent_retry_delay=float(os.getenv("RENT_RETRY_DELAY_SECONDS", "5")),
         otp_timeout=int(os.getenv("OTP_TIMEOUT_SECONDS", "600")),
+        prefilter_workers=int(os.getenv("PREFILTER_WORKERS", "4")),
+        hunt_slots=int(os.getenv("HUNT_SLOTS", "2")),
         tg_bot_token=os.getenv("TG_BOT_TOKEN", "").strip(),
         tg_chat_id=os.getenv("TG_CHAT_ID", "").strip(),
     )
@@ -84,6 +86,8 @@ class Config:
     rent_retries: int = 600
     rent_retry_delay: float = 5.0
     otp_timeout: int = 600
+    prefilter_workers: int = 4
+    hunt_slots: int = 2
 
     # telegram (optional)
     tg_bot_token: str = ""
