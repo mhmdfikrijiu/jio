@@ -67,13 +67,10 @@ def prefilter_once(
     phone = normalize_phone(raw)
     ok, detail = jio_check_detail(phone)
     if not ok:
-        # Langsung cancel via API Grizzly — dana balik dalam menit
-        try:
-            provider.cancel(act_id)
-            _report("fail", phone, f"TUNAI CANCEL ({detail})")
-        except Exception as e:
-            refunds.schedule(act_id, 120, aggressive=True)
-            _report("fail", phone, f"API GAGAL {e}")
+        # Grizzly butuh >2 menit dari activation time sebelum bisa cancel
+        # langsung vs schedule refund agresif
+        refunds.schedule(act_id, 120, aggressive=True)
+        _report("fail", phone, f"TIDAK SUBSCRIBED ({detail[:30]})")
         return None
     return act_id, phone
 
